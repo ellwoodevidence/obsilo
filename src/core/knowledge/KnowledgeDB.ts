@@ -108,6 +108,7 @@ export class KnowledgeDB {
     private db: SqlJsDatabase | null = null;
     private SQL: SqlJsStatic | null = null;
     private vault: Vault;
+    private pluginDir: string;
     private storageLocation: 'global' | 'local' | 'obsidian-sync';
     private absolutePath: string;       // Absolute FS path (for global: fs.promises)
     private vaultRelativePath: string;  // Vault-relative path (for local/sync: vault.adapter)
@@ -124,6 +125,7 @@ export class KnowledgeDB {
         globalRoot?: string,
     ) {
         this.vault = vault;
+        this.pluginDir = pluginDir;
         this.storageLocation = storageLocation;
 
         const basePath = (vault.adapter as unknown as { getBasePath?(): string }).getBasePath?.() ?? '';
@@ -151,17 +153,21 @@ export class KnowledgeDB {
         // Obsidian's app:// protocol can't serve WASM files via fetch().
         // Load the binary directly from disk and pass it to sql.js.
         const pluginBasePath = (this.vault.adapter as unknown as { getBasePath?(): string }).getBasePath?.() ?? '';
-        const configDir = this.vault.configDir;
-        const pluginMainDir = path.join(pluginBasePath, configDir, 'plugins', 'obsilo-agent');
+        const pluginMainDir = path.join(pluginBasePath, this.pluginDir);
 
-        // Try browser variant first (what esbuild bundles), then fallback
-        let wasmBinary: Buffer;
+        // Try browser variant first (what esbuild bundles), then fallback to the node variant.
+        let wasmBinary: Buffer | null = null;
         const browserWasm = path.join(pluginMainDir, 'sql-wasm-browser.wasm');
         const nodeWasm = path.join(pluginMainDir, 'sql-wasm.wasm');
         try {
             wasmBinary = fs.readFileSync(browserWasm);
-        } catch {
-            wasmBinary = fs.readFileSync(nodeWasm);
+        } catch (browserErr) {
+            try {
+                wasmBinary = fs.readFileSync(nodeWasm);
+            } catch (nodeErr) {
+                console.warn('[KnowledgeDB] SQL.js WASM binary not found. Checked:', browserWasm, nodeWasm);
+                throw nodeErr;
+            }
         }
 
         this.SQL = await initSqlJs({ wasmBinary: wasmBinary.buffer });

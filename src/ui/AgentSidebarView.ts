@@ -172,7 +172,7 @@ export class AgentSidebarView extends ItemView {
         this.currentAbortController?.abort();
         this.saveCurrentConversation();
         this.enqueueMemoryExtraction();
-        this.attachments.clear();
+        this.attachments?.clear?.();
         return Promise.resolve();
     }
 

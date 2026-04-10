@@ -363,48 +363,55 @@ export default class ObsidianAgentPlugin extends Plugin {
             await this.knowledgeDB.open().catch((e) =>
                 console.warn('[Plugin] KnowledgeDB open failed (non-fatal):', e)
             );
-            this.vectorStore = new VectorStore(this.knowledgeDB);
-            this.graphStore = new GraphStore(this.knowledgeDB);
-            this.semanticIndex = new SemanticIndexService(this.app.vault, this.knowledgeDB, this.vectorStore, {
-                batchSize: this.settings.semanticBatchSize,
-                embeddingBatchSize: 16,  // texts per API call — batch for performance
-                excludedFolders: this.settings.semanticExcludedFolders,
-                indexPdfs: this.settings.semanticIndexPdfs,
-                chunkSize: this.settings.semanticChunkSize ?? 2000,
-                enableContextualRetrieval: this.settings.enableContextualRetrieval,
-            });
-            const embeddingModel = this.getActiveEmbeddingModel();
-            if (embeddingModel) this.semanticIndex.setEmbeddingModel(embeddingModel);
-            // Contextual Retrieval: set API handler for prefix generation (FEATURE-1501)
-            if (this.settings.enableContextualRetrieval && this.settings.contextualModelKey) {
-                const ctxModel = this.settings.activeModels.find(
-                    (m) => getModelKey(m) === this.settings.contextualModelKey && m.enabled,
-                );
-                if (ctxModel) {
-                    const { buildApiHandlerForModel } = await import('./api/index');
-                    this.semanticIndex.setContextualApiHandler(buildApiHandlerForModel(ctxModel));
-                }
+            if (this.knowledgeDB.isOpen()) {
+                this.vectorStore = new VectorStore(this.knowledgeDB);
+                this.graphStore = new GraphStore(this.knowledgeDB);
+                this.semanticIndex = new SemanticIndexService(this.app.vault, this.knowledgeDB, this.vectorStore, {
+                    batchSize: this.settings.semanticBatchSize,
+                    embeddingBatchSize: 16,  // texts per API call — batch for performance
+                    excludedFolders: this.settings.semanticExcludedFolders,
+                    indexPdfs: this.settings.semanticIndexPdfs,
+                    chunkSize: this.settings.semanticChunkSize ?? 2000,
+                    enableContextualRetrieval: this.settings.enableContextualRetrieval,
+                });
+                const embeddingModel = this.getActiveEmbeddingModel();
+                if (embeddingModel) this.semanticIndex.setEmbeddingModel(embeddingModel);
+            } else {
+                console.warn('[Plugin] Semantic index disabled because KnowledgeDB failed to open.');
             }
-            await this.semanticIndex.initialize().catch((e) =>
-                console.warn('[Plugin] Semantic index init failed (non-fatal):', e)
-            );
-            // Auto-index on startup if configured
-            if (this.settings.semanticAutoIndex === 'startup') {
-                // buildIndex() auto-triggers enrichment after completion
-                this.semanticIndex.buildIndex().catch((e) =>
-                    console.warn('[Plugin] Auto-index on startup failed:', e)
+            if (this.semanticIndex) {
+                const semanticIndex = this.semanticIndex;
+                // Contextual Retrieval: set API handler for prefix generation (FEATURE-1501)
+                if (this.settings.enableContextualRetrieval && this.settings.contextualModelKey) {
+                    const ctxModel = this.settings.activeModels.find(
+                        (m) => getModelKey(m) === this.settings.contextualModelKey && m.enabled,
+                    );
+                    if (ctxModel) {
+                        const { buildApiHandlerForModel } = await import('./api/index');
+                        semanticIndex.setContextualApiHandler(buildApiHandlerForModel(ctxModel));
+                    }
+                }
+                await semanticIndex.initialize().catch((e) =>
+                    console.warn('[Plugin] Semantic index init failed (non-fatal):', e)
                 );
-            } else if (
-                this.semanticIndex.isIndexed &&
-                this.settings.enableContextualRetrieval &&
-                this.settings.contextualModelKey &&
-                this.vectorStore
-            ) {
-                // No build needed, but check for unenriched chunks from a previous session
-                const unenriched = this.vectorStore.getUnenrichedCount();
-                if (unenriched > 0) {
-                    console.debug(`[Plugin] ${unenriched} unenriched chunks found — starting background enrichment`);
-                    void this.semanticIndex.runBackgroundEnrichment();
+                // Auto-index on startup if configured
+                if (this.settings.semanticAutoIndex === 'startup') {
+                    // buildIndex() auto-triggers enrichment after completion
+                    semanticIndex.buildIndex().catch((e) =>
+                        console.warn('[Plugin] Auto-index on startup failed:', e)
+                    );
+                } else if (
+                    semanticIndex.isIndexed &&
+                    this.settings.enableContextualRetrieval &&
+                    this.settings.contextualModelKey &&
+                    this.vectorStore
+                ) {
+                    // No build needed, but check for unenriched chunks from a previous session
+                    const unenriched = this.vectorStore.getUnenrichedCount();
+                    if (unenriched > 0) {
+                        console.debug(`[Plugin] ${unenriched} unenriched chunks found — starting background enrichment`);
+                        void semanticIndex.runBackgroundEnrichment();
+                    }
                 }
             }
 
@@ -429,7 +436,7 @@ export default class ObsidianAgentPlugin extends Plugin {
                     this.graphStore,
                 );
                 // Auto-compute after startup if index exists
-                if (this.semanticIndex.isIndexed) {
+                if (this.semanticIndex?.isIndexed) {
                     this.app.workspace.onLayoutReady(() => {
                         void this.implicitConnectionService?.computeAll(this.settings.implicitThreshold);
                     });
